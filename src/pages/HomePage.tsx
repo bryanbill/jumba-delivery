@@ -1,58 +1,137 @@
 import { StatusBar } from "expo-status-bar";
-import { StyleSheet, View } from "react-native";
-import MapView, { Marker } from "react-native-maps";
-import React, { useEffect, useState } from "react";
+import { StyleSheet, View, Text } from "react-native";
+import MapView, { Marker, Polyline } from "react-native-maps";
+import React, { useEffect, useState, useCallback } from "react";
+import * as Location from "expo-location";
 import io from "socket.io-client";
+import { Driver } from "common/interface";
 
-interface Driver {
-  id: string;
-  name: string;
-  location: {
-    latitude: number;
-    longitude: number;
-  };
-}
+const SOCKET_URL = "http://192.168.1.137:8000";
 
 export default function HomePage() {
-  const region = {
-    latitude: -1.2921,
-    longitude: 36.8219,
-    latitudeDelta: 0.0922,
-    longitudeDelta: 0.0421,
-  };
-
-  const socket = io("http://localhost:3000", {
-    autoConnect: false,
-  });
-
   const [drivers, setDrivers] = useState([] as Driver[]);
+  const [currentLocation, setCurrentLocation] =
+    useState<Location.LocationObject | null>(null);
+  const [errorMsg, setErrorMsg] = useState("");
 
-  useEffect(() => {
-    socket.connect();
+  // Handles fetching and updating driver data
+  const handleSocketEvents = useCallback(() => {
+    const socket = io(SOCKET_URL);
 
     socket.on("connect", () => {
       console.log("Connected to the server");
+      socket.emit("get_drivers");
     });
 
-    socket.on("location_update", (data) => {
+    socket.on("drivers", (data: Driver[]) => {
+      console.log("Initial drivers:", data);
       setDrivers(data);
     });
+
+    socket.on("driver_location_update", (data: Driver) => {
+      updateDriverLocation(data);
+    });
+
+    return () => socket.disconnect();
   }, []);
+
+  // Updates location for a specific driver
+  const updateDriverLocation = useCallback((updatedDriver: Driver) => {
+    setDrivers((prevDrivers) =>
+      prevDrivers.map((driver) => {
+        if (driver.id === updatedDriver.id) {
+          return {
+            ...driver,
+            // Ensure updates array exists
+            updates: driver.updates
+              ? [
+                  ...driver.updates,
+                  {
+                    latitude: updatedDriver.latitude,
+                    longitude: updatedDriver.longitude,
+                  },
+                ]
+              : [
+                  {
+                    latitude: updatedDriver.latitude,
+                    longitude: updatedDriver.longitude,
+                  },
+                ],
+          };
+        }
+        return driver;
+      })
+    );
+  }, []);
+
+  useEffect(() => {
+    const init = async () => {
+      const locationResult = await Location.requestForegroundPermissionsAsync();
+
+      if (locationResult.status !== "granted") {
+        setErrorMsg("Permission to access location was denied");
+        return;
+      }
+
+      const location = await Location.getCurrentPositionAsync({});
+      setCurrentLocation(location);
+    };
+
+    init();
+    handleSocketEvents();
+  }, [handleSocketEvents]); // Ensure socket logic reruns if dependencies change
 
   return (
     <View style={styles.container}>
       <StatusBar style="auto" />
-      <MapView style={styles.map} initialRegion={region} mapType={"hybrid"}>
-        {drivers.map((driver) => (
-          <Marker
-            coordinate={{
-              latitude: driver.location.latitude,
-              longitude: driver.location.longitude,
-            }}
-            title={driver.name}
-          ></Marker>
-        ))}
-      </MapView>
+      {(currentLocation?.coords && (
+        <MapView
+          style={styles.map}
+          initialRegion={{
+            latitude: currentLocation.coords.latitude,
+            longitude: currentLocation.coords.longitude,
+            latitudeDelta: 0.0922,
+            longitudeDelta: 0.0421,
+          }}
+          mapType={"hybrid"}
+        >
+          {drivers.map((driver) => {
+            const lastUpdate = driver.updates[driver.updates.length - 1];
+
+            return (
+              <>
+                <Marker
+                  key={driver.id}
+                  coordinate={{
+                    latitude: lastUpdate.latitude,
+                    longitude: lastUpdate.longitude,
+                  }}
+                  title={driver.name}
+                ></Marker>
+              </>
+            );
+          })}
+          {drivers.map((driver) => {
+            return (
+              <Polyline
+                key={driver.id}
+                coordinates={driver.updates.map((update) => {
+                  return {
+                    latitude: update.latitude,
+                    longitude: update.longitude,
+                  };
+                })}
+                strokeColor={"blue"}
+                strokeWidth={10}
+              />
+            );
+          })}
+        </MapView>
+      )) || (
+        <View>
+          <Text>{errorMsg}</Text>
+        </View>
+      )}
     </View>
   );
 }
