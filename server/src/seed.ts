@@ -1,11 +1,17 @@
 import { Server } from "socket.io";
 import { DriverModel } from "./model/driver";
-import { v4 } from "uuid";
 import { Sequelize } from "sequelize";
 
+/**
+ * This is a seed function that will be used to update the driver's location every 5 seconds: Mocks real-time location update
+ * 
+ * @param io 
+ * 
+ * @param sequelize 
+ */
 const seed = async (io: Server, sequelize: Sequelize) => {
     try {
-        
+
         setInterval(async () => {
             const drivers = await DriverModel(sequelize).findAll();
 
